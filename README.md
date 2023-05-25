@@ -11,4 +11,6 @@ ComfyUI-界面汉化,方便大家熟悉操作
 用本项目的web目录，覆盖ComfyUI的web目录
 
 ### 方法二.下载压缩包
+[进入此页面](https://github.com/taozuidesongshu/ComfyUI-to-Chinese/releases)
+![](./assets/4.jpg)
 解压后的web目录，覆盖ComfyUI的web目录
