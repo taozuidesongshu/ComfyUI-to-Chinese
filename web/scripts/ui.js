@@ -3,16 +3,23 @@ import { api } from "./api.js";
 export function $el(tag, propsOrChildren, children) {
 	const split = tag.split(".");
 	const element = document.createElement(split.shift());
-	element.classList.add(...split);
+	if (split.length > 0) {
+		element.classList.add(...split);
+	}
+
 	if (propsOrChildren) {
 		if (Array.isArray(propsOrChildren)) {
 			element.append(...propsOrChildren);
 		} else {
-			const { parent, $: cb, dataset, style } = propsOrChildren;
+			const {parent, $: cb, dataset, style} = propsOrChildren;
 			delete propsOrChildren.parent;
 			delete propsOrChildren.$;
 			delete propsOrChildren.dataset;
 			delete propsOrChildren.style;
+
+			if (Object.hasOwn(propsOrChildren, "for")) {
+				element.setAttribute("for", propsOrChildren.for)
+			}
 
 			if (style) {
 				Object.assign(element.style, style);
@@ -119,6 +126,7 @@ function dragElement(dragEl, settings) {
 			savePos = value;
 		},
 	});
+
 	function dragMouseDown(e) {
 		e = e || window.event;
 		e.preventDefault();
@@ -161,8 +169,8 @@ function dragElement(dragEl, settings) {
 
 export class ComfyDialog {
 	constructor() {
-		this.element = $el("div.comfy-modal", { parent: document.body }, [
-			$el("div.comfy-modal-content", [$el("p", { $: (p) => (this.textElement = p) }), ...this.createButtons()]),
+		this.element = $el("div.comfy-modal", {parent: document.body}, [
+			$el("div.comfy-modal-content", [$el("p", {$: (p) => (this.textElement = p)}), ...this.createButtons()]),
 		]);
 	}
 
@@ -193,7 +201,25 @@ export class ComfyDialog {
 class ComfySettingsDialog extends ComfyDialog {
 	constructor() {
 		super();
-		this.element.classList.add("comfy-settings");
+		this.element = $el("dialog", {
+			id: "comfy-settings-dialog",
+			parent: document.body,
+		}, [
+			$el("table.comfy-modal-content.comfy-table", [
+				$el("caption", {textContent: "Settings"}),
+				$el("tbody", {$: (tbody) => (this.textElement = tbody)}),
+				$el("button", {
+					type: "button",
+					textContent: "Close",
+					style: {
+						cursor: "pointer",
+					},
+					onclick: () => {
+						this.element.close();
+					},
+				}),
+			]),
+		]);
 		this.settings = [];
 	}
 
@@ -208,15 +234,16 @@ class ComfySettingsDialog extends ComfyDialog {
 		localStorage[settingId] = JSON.stringify(value);
 	}
 
-	addSetting({ id, name, type, defaultValue, onChange, attrs = {}, tooltip = "", }) {
+	addSetting({id, name, type, defaultValue, onChange, attrs = {}, tooltip = "",}) {
 		if (!id) {
 			throw new Error("Settings must have an ID");
 		}
+
 		if (this.settings.find((s) => s.id === id)) {
-			throw new Error("Setting IDs must be unique");
+			throw new Error(`Setting ${id} of type ${type} must have a unique ID.`);
 		}
 
-		const settingId = "Comfy.Settings." + id;
+		const settingId = `Comfy.Settings.${id}`;
 		const v = localStorage[settingId];
 		let value = v == null ? defaultValue : JSON.parse(v);
 
@@ -234,34 +261,50 @@ class ComfySettingsDialog extends ComfyDialog {
 					localStorage[settingId] = JSON.stringify(v);
 					value = v;
 				};
+				value = this.getSettingValue(id, defaultValue);
 
 				let element;
-				value = this.getSettingValue(id, defaultValue);
+				const htmlID = id.replaceAll(".", "-");
+
+				const labelCell = $el("td", [
+					$el("label", {
+						for: htmlID,
+						classList: [tooltip !== "" ? "comfy-tooltip-indicator" : ""],
+						textContent: name,
+					})
+				]);
 
 				if (typeof type === "function") {
 					element = type(name, setter, value, attrs);
 				} else {
 					switch (type) {
 						case "boolean":
-							element = $el("div", [
-								$el("label", { textContent: name || id }, [
+							element = $el("tr", [
+								labelCell,
+								$el("td", [
 									$el("input", {
+										id: htmlID,
 										type: "checkbox",
-										checked: !!value,
-										oninput: (e) => {
-											setter(e.target.checked);
+										checked: value,
+										onchange: (event) => {
+											const isChecked = event.target.checked;
+											if (onChange !== undefined) {
+												onChange(isChecked)
+											}
+											this.setSettingValue(id, isChecked);
 										},
-										...attrs
 									}),
 								]),
-							]);
+							])
 							break;
 						case "number":
-							element = $el("div", [
-								$el("label", { textContent: name || id }, [
+							element = $el("tr", [
+								labelCell,
+								$el("td", [
 									$el("input", {
 										type,
 										value,
+										id: htmlID,
 										oninput: (e) => {
 											setter(e.target.value);
 										},
@@ -271,46 +314,62 @@ class ComfySettingsDialog extends ComfyDialog {
 							]);
 							break;
 						case "slider":
-							element = $el("div", [
-								$el("label", { textContent: name }, [
-									$el("input", {
-										type: "range",
-										value,
-										oninput: (e) => {
-											setter(e.target.value);
-											e.target.nextElementSibling.value = e.target.value;
+							element = $el("tr", [
+								labelCell,
+								$el("td", [
+									$el("div", {
+										style: {
+											display: "grid",
+											gridAutoFlow: "column",
 										},
-										...attrs
-									}),
-									$el("input", {
-										type: "number",
-										value,
-										oninput: (e) => {
-											setter(e.target.value);
-											e.target.previousElementSibling.value = e.target.value;
-										},
-										...attrs
-									}),
+									}, [
+										$el("input", {
+											...attrs,
+											value,
+											type: "range",
+											oninput: (e) => {
+												setter(e.target.value);
+												e.target.nextElementSibling.value = e.target.value;
+											},
+										}),
+										$el("input", {
+											...attrs,
+											value,
+											id: htmlID,
+											type: "number",
+											style: {maxWidth: "4rem"},
+											oninput: (e) => {
+												setter(e.target.value);
+												e.target.previousElementSibling.value = e.target.value;
+											},
+										}),
+									]),
 								]),
 							]);
 							break;
+						case "text":
 						default:
-							console.warn("Unsupported setting type, defaulting to text");
-							element = $el("div", [
-								$el("label", { textContent: name || id }, [
+							if (type !== "text") {
+								console.warn(`Unsupported setting type '${type}, defaulting to text`);
+							}
+
+							element = $el("tr", [
+								labelCell,
+								$el("td", [
 									$el("input", {
 										value,
+										id: htmlID,
 										oninput: (e) => {
 											setter(e.target.value);
 										},
-										...attrs
+										...attrs,
 									}),
 								]),
 							]);
 							break;
 					}
 				}
-				if(tooltip) {
+				if (tooltip) {
 					element.title = tooltip;
 				}
 
@@ -330,13 +389,16 @@ class ComfySettingsDialog extends ComfyDialog {
 	}
 
 	show() {
-		super.show();
-		Object.assign(this.textElement.style, {
-			display: "flex",
-			flexDirection: "column",
-			gap: "10px"
-		});
-		this.textElement.replaceChildren(...this.settings.map((s) => s.render()));
+		this.textElement.replaceChildren(
+			$el("tr", {
+				style: {display: "none"},
+			}, [
+				$el("th"),
+				$el("th", {style: {width: "33%"}})
+			]),
+			...this.settings.map((s) => s.render()),
+		)
+		this.element.showModal();
 	}
 }
 
@@ -462,19 +524,44 @@ export class ComfyUI {
 			defaultValue: true,
 		});
 
+		/**
+		 * file format for preview
+		 *
+		 * format;quality
+		 *
+		 * ex)
+		 * webp;50 -> webp, quality 50
+		 * jpeg;80 -> rgb, jpeg, quality 80
+		 *
+		 * @type {string}
+		 */
+		const previewImage = this.settings.addSetting({
+			id: "Comfy.PreviewFormat",
+			name: "当在图像小部件中显示预览时，将其转换为轻量级图像，例如webp、jpeg、webp;50等。",
+			type: "text",
+			defaultValue: "",
+		});
+
 		const fileInput = $el("input", {
 			id: "comfy-file-input",
 			type: "file",
-			accept: ".json,image/png,.latent",
-			style: { display: "none" },
+			accept: ".json,image/png,.latent,.safetensors",
+			style: {display: "none"},
 			parent: document.body,
 			onchange: () => {
 				app.handleFile(fileInput.files[0]);
 			},
 		});
 
-		this.menuContainer = $el("div.comfy-menu", { parent: document.body }, [
-			$el("div.drag-handle", { style: { overflow: "hidden", position: "relative", width: "100%", cursor: "default" } }, [
+		this.menuContainer = $el("div.comfy-menu", {parent: document.body}, [
+			$el("div.drag-handle", {
+				style: {
+					overflow: "hidden",
+					position: "relative",
+					width: "100%",
+					cursor: "default"
+				}
+			}, [
 				$el("span.drag-handle"),
 				$el("span", { $: (q) => (this.queueSize = q) }),
 				$el("button.comfy-settings-btn", { textContent: "⚙️", onclick: () => this.settings.show() }),
@@ -529,7 +616,11 @@ export class ComfyUI {
 				]),
 			]),
 			$el("div.comfy-menu-btns", [
-				$el("button", { id: "queue-front-button", textContent: "插队到开头", onclick: () => app.queuePrompt(-1, this.batchCount) }),
+				$el("button", {
+					id: "queue-front-button",
+					textContent: "插队到开头",
+					onclick: () => app.queuePrompt(-1, this.batchCount)
+				}),
 				$el("button", {
 					$: (b) => (this.queue.button = b),
 					id: "comfy-view-queue-button",
@@ -579,25 +670,33 @@ export class ComfyUI {
 					}, 0);
 				},
 			}),
-			$el("button", { id: "comfy-load-button", textContent: "加载流程", onclick: () => fileInput.click() }),
-			$el("button", { id: "comfy-refresh-button", textContent: "刷新", onclick: () => app.refreshComboInNodes() }),
-			$el("button", { id: "comfy-clipspace-button", textContent: "从剪贴板加载", onclick: () => app.openClipspace() }),
-			$el("button", { id: "comfy-clear-button", textContent: "清除", onclick: () => {
-				if (!confirmClear.value || confirm("清除工作流程?")) {
-					app.clean();
-					app.graph.clear();
+			$el("button", {id: "comfy-load-button", textContent: "加载流程", onclick: () => fileInput.click()}),
+			$el("button", {
+				id: "comfy-refresh-button",
+				textContent: "刷新",
+				onclick: () => app.refreshComboInNodes()
+			}),
+			$el("button", {id: "comfy-clipspace-button", textContent: "从剪贴板加载", onclick: () => app.openClipspace()}),
+			$el("button", {
+				id: "comfy-clear-button", textContent: "清除", onclick: () => {
+					if (!confirmClear.value || confirm("清除工作流程?")) {
+						app.clean();
+						app.graph.clear();
+					}
 				}
-			}}),
-			$el("button", { id: "comfy-load-default-button", textContent: "加载默认值", onclick: () => {
-				if (!confirmClear.value || confirm("加载默认工作程?")) {
-					app.loadGraphData()
+			}),
+			$el("button", {
+				id: "comfy-load-default-button", textContent: "加载默认值", onclick: () => {
+					if (!confirmClear.value || confirm("加载默认工作程?")) {
+						app.loadGraphData()
+					}
 				}
-			}}),
+			}),
 		]);
 
 		dragElement(this.menuContainer, this.settings);
 
-		this.setStatus({ exec_info: { queue_remaining: "X" } });
+		this.setStatus({exec_info: {queue_remaining: "X"}});
 	}
 
 	setStatus(status) {
