@@ -1,4 +1,4 @@
-import { api } from "./api.js";
+import {api} from "./api.js";
 
 export function $el(tag, propsOrChildren, children) {
 	const split = tag.split(".");
@@ -234,7 +234,7 @@ class ComfySettingsDialog extends ComfyDialog {
 		localStorage[settingId] = JSON.stringify(value);
 	}
 
-	addSetting({id, name, type, defaultValue, onChange, attrs = {}, tooltip = "",}) {
+	addSetting({id, name, type, defaultValue, onChange, attrs = {}, tooltip = "", options = undefined}) {
 		if (!id) {
 			throw new Error("Settings must have an ID");
 		}
@@ -347,6 +347,32 @@ class ComfySettingsDialog extends ComfyDialog {
 								]),
 							]);
 							break;
+						case "combo":
+							element = $el("tr", [
+								labelCell,
+								$el("td", [
+									$el(
+										"select",
+										{
+											oninput: (e) => {
+												setter(e.target.value);
+											},
+										},
+										(typeof options === "function" ? options(value) : options || []).map((opt) => {
+											if (typeof opt === "string") {
+												opt = { text: opt };
+											}
+											const v = opt.value ?? opt.text;
+											return $el("option", {
+												value: v,
+												textContent: opt.text,
+												selected: value + "" === v + "",
+											});
+										})
+									),
+								]),
+							]);
+							break;
 						case "text":
 						default:
 							if (type !== "text") {
@@ -405,10 +431,12 @@ class ComfySettingsDialog extends ComfyDialog {
 class ComfyList {
 	#type;
 	#text;
+	#reverse;
 
-	constructor(text, type) {
+	constructor(text, type, reverse) {
 		this.#text = text;
 		this.#type = type || text.toLowerCase();
+		this.#reverse = reverse || false;
 		this.element = $el("div.comfy-list");
 		this.element.style.display = "none";
 	}
@@ -425,13 +453,13 @@ class ComfyList {
 					textContent: section,
 				}),
 				$el("div.comfy-list-items", [
-					...items[section].map((item) => {
+					...(this.#reverse ? items[section].reverse() : items[section]).map((item) => {
 						// Allow items to specify a custom remove action (e.g. for interrupt current prompt)
 						const removeAction = item.remove || {
 							name: "删除",
 							cb: () => api.deleteItem(this.#type, item.prompt[1]),
 						};
-						return $el("div", { textContent: item.prompt[0] + ": " }, [
+						return $el("div", {textContent: item.prompt[0] + ": "}, [
 							$el("button", {
 								textContent: "加载",
 								onclick: () => {
@@ -542,6 +570,32 @@ export class ComfyUI {
 			defaultValue: "",
 		});
 
+		this.settings.addSetting({
+			id: "Comfy.DisableSliders",
+			name: "Disable sliders.",
+			type: "boolean",
+			defaultValue: false,
+		});
+
+		this.settings.addSetting({
+			id: "Comfy.DisableFloatRounding",
+			name: "Disable rounding floats (requires page reload).",
+			type: "boolean",
+			defaultValue: false,
+		});
+
+		this.settings.addSetting({
+			id: "Comfy.FloatRoundingPrecision",
+			name: "Decimal places [0 = auto] (requires page reload).",
+			type: "slider",
+			attrs: {
+				min: 0,
+				max: 6,
+				step: 1,
+			},
+			defaultValue: 0,
+		});
+
 		const fileInput = $el("input", {
 			id: "comfy-file-input",
 			type: "file",
@@ -563,8 +617,8 @@ export class ComfyUI {
 				}
 			}, [
 				$el("span.drag-handle"),
-				$el("span", { $: (q) => (this.queueSize = q) }),
-				$el("button.comfy-settings-btn", { textContent: "⚙️", onclick: () => this.settings.show() }),
+				$el("span", {$: (q) => (this.queueSize = q)}),
+				$el("button.comfy-settings-btn", {textContent: "⚙️", onclick: () => this.settings.show()}),
 			]),
 			$el("button.comfy-queue-btn", {
 				id: "queue-button",
@@ -583,14 +637,16 @@ export class ComfyUI {
 					}),
 				]),
 			]),
-			$el("div", { id: "extraOptions", style: { width: "100%", display: "none" } }, [
-				$el("label", { innerHTML: "批数" }, [
+			$el("div", {id: "extraOptions", style: {width: "100%", display: "none"}}, [
+				$el("div",[
+
+					$el("label", {innerHTML: "批数"}),
 					$el("input", {
 						id: "batchCountInputNumber",
 						type: "number",
 						value: this.batchCount,
 						min: "1",
-						style: { width: "35%", "margin-left": "0.4em" },
+						style: {width: "35%", "margin-left": "0.4em"},
 						oninput: (i) => {
 							this.batchCount = i.target.value;
 							document.getElementById("batchCountInputRange").value = this.batchCount;
@@ -606,14 +662,23 @@ export class ComfyUI {
 							this.batchCount = i.srcElement.value;
 							document.getElementById("batchCountInputNumber").value = i.srcElement.value;
 						},
+					}),		
+				]),
+
+				$el("div",[
+					$el("label",{
+						for:"autoQueueCheckbox",
+						innerHTML: "Auto Queue"
+						// textContent: "Auto Queue"
 					}),
 					$el("input", {
 						id: "autoQueueCheckbox",
 						type: "checkbox",
 						checked: false,
 						title: "当队列大小达到0时自动提示队列",
+						
 					}),
-				]),
+				])
 			]),
 			$el("div.comfy-menu-btns", [
 				$el("button", {
@@ -654,23 +719,56 @@ export class ComfyUI {
 							filename += ".json";
 						}
 					}
-					const json = JSON.stringify(app.graph.serialize(), null, 2); // convert the data to a JSON string
-					const blob = new Blob([json], { type: "application/json" });
-					const url = URL.createObjectURL(blob);
-					const a = $el("a", {
-						href: url,
-						download: filename,
-						style: { display: "none" },
-						parent: document.body,
+					app.graphToPrompt().then(p=>{
+						const json = JSON.stringify(p.workflow, null, 2); // convert the data to a JSON string
+						const blob = new Blob([json], {type: "application/json"});
+						const url = URL.createObjectURL(blob);
+						const a = $el("a", {
+							href: url,
+							download: filename,
+							style: {display: "none"},
+							parent: document.body,
+						});
+						a.click();
+						setTimeout(function () {
+							a.remove();
+							window.URL.revokeObjectURL(url);
+						}, 0);
 					});
-					a.click();
-					setTimeout(function () {
-						a.remove();
-						window.URL.revokeObjectURL(url);
-					}, 0);
 				},
 			}),
-			$el("button", {id: "comfy-load-button", textContent: "加载流程", onclick: () => fileInput.click()}),
+			$el("button", {
+				id: "comfy-dev-save-api-button",
+				textContent: "保存(API格式)",
+				style: {width: "100%", display: "none"},
+				onclick: () => {
+					let filename = "workflow_api.json";
+					if (promptFilename.value) {
+						filename = prompt("Save workflow (API) as:", filename);
+						if (!filename) return;
+						if (!filename.toLowerCase().endsWith(".json")) {
+							filename += ".json";
+						}
+					}
+					app.graphToPrompt().then(p=>{
+						const json = JSON.stringify(p.output, null, 2); // convert the data to a JSON string
+						const blob = new Blob([json], {type: "application/json"});
+						const url = URL.createObjectURL(blob);
+						const a = $el("a", {
+							href: url,
+							download: filename,
+							style: {display: "none"},
+							parent: document.body,
+						});
+						a.click();
+						setTimeout(function () {
+							a.remove();
+							window.URL.revokeObjectURL(url);
+						}, 0);
+					});
+				},
+			}),
+			$el("button", {id: "comfy-load-button", textContent: "加载", onclick: () => fileInput.click()}),
 			$el("button", {
 				id: "comfy-refresh-button",
 				textContent: "刷新",
@@ -694,6 +792,14 @@ export class ComfyUI {
 			}),
 		]);
 
+		const devMode = this.settings.addSetting({
+			id: "Comfy.DevMode",
+			name: "Enable Dev mode Options",
+			type: "boolean",
+			defaultValue: false,
+			onChange: function(value) { document.getElementById("comfy-dev-save-api-button").style.display = value ? "block" : "none"},
+		});
+
 		dragElement(this.menuContainer, this.settings);
 
 		this.setStatus({exec_info: {queue_remaining: "X"}});
@@ -705,7 +811,8 @@ export class ComfyUI {
 			if (
 				this.lastQueueSize != 0 &&
 				status.exec_info.queue_remaining == 0 &&
-				document.getElementById("autoQueueCheckbox").checked
+				document.getElementById("autoQueueCheckbox").checked &&
+				! app.lastExecutionError
 			) {
 				app.queuePrompt(0, this.batchCount);
 			}
